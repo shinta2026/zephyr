@@ -13,7 +13,7 @@ on:
       jenkins_token:
         description: "Jenkins API Token (NOT SECURE)"
         required: true
-        default: "09e2b62ca078478d97ea9078f442fcbe"
+        default: "1176ef01fd66e13880b3347a59f372564f"
         type: string
 
   pull_request:
