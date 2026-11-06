@@ -1,3 +1,4 @@
+
 name: Test Workflow
 
 on:
@@ -7,10 +8,20 @@ on:
         description: "Git Branch"
         required: true
         default: "main"
+        type: string
+
+      jenkins_token:
+        description: "Jenkins API Token (NOT SECURE)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   hello:
     runs-on: ubuntu-24.04
+
     steps:
       - name: Print message
         run: |
@@ -18,14 +29,26 @@ jobs:
           echo "Workflow triggered successfully"
 
   trigger-jenkins:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Trigger Jenkins Job
-        run: |
-          curl -X POST \
-            -u "Admin:09e2b62ca078478d97ea9078f442fcbe" \
-            "http://10.201.0.17:8080/job/imaging_fusa_automation_test/buildWithParameters" \
-            --data-urlencode "GIT_REPO=https://github.com/shinta2026/imaging_fusa_test_automation" \
-            --data-urlencode "BRANCH=${{ github.event.inputs.branch }}" \
-            --data-urlencode "EMAIL_TO=shinta.zachariah@neurealm.com"
+    needs: hello
+    runs-on: [self-hosted, linux, x64, jenkins-internal]
 
+    steps:
+      - name: Trigger Jenkins
+        shell: bash
+        env:
+          JENKINS_USER: "Admin"
+          JENKINS_TOKEN: ${{ inputs.jenkins_token }}
+          GIT_BRANCH: ${{ inputs.branch }}
+
+        run: |
+          set -euo pipefail
+
+          curl --fail-with-body --silent --show-error \
+            --user "$JENKINS_USER:$JENKINS_TOKEN" \
+            --request POST \
+            --data-urlencode "GIT_REPO=https://github.com/shinta2026/imaging_fusa_test_automation" \
+            --data-urlencode "BRANCH=$GIT_BRANCH" \
+            --data-urlencode "EMAIL_TO=shinta.zachariah@neurealm.com" \
+            "http://10.201.0.17:8080/job/imaging_fusa_automation_test/buildWithParameters"
+
+          echo "Jenkins build request accepted"
