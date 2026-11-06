@@ -3,18 +3,6 @@ name: Test Workflow
 
 on:
   workflow_dispatch:
-    inputs:
-      branch:
-        description: "Git Branch"
-        required: true
-        default: "main"
-        type: string
-
-      jenkins_token:
-        description: "Jenkins API Token (NOT SECURE)"
-        required: true
-        default: "1176ef01fd66e13880b3347a59f372564f"
-        type: string
 
   pull_request:
     types:
@@ -60,8 +48,7 @@ jobs:
         shell: bash
         env:
           JENKINS_USER: "Admin"
-          JENKINS_TOKEN: ${{ inputs.jenkins_token }}
-          GIT_BRANCH: ${{ inputs.branch }}
+          GIT_BRANCH: "main"
 
         run: |
           set -euo pipefail
