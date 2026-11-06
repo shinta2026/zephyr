@@ -15,6 +15,13 @@ on:
         required: true
         type: string
 
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
 permissions:
   contents: read
 
@@ -27,6 +34,21 @@ jobs:
         run: |
           echo "Hello"
           echo "Workflow triggered successfully"
+
+  
+  validate-github-event:
+    name: Validate GitHub Event
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Print Event Details
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "Event: $EVENT_NAME"
+          echo "PR Number: $PR_NUMBER"
+          echo "GitHub workflow triggered"
 
   trigger-jenkins:
     needs: hello
