@@ -13,6 +13,7 @@ on:
       jenkins_token:
         description: "Jenkins API Token (NOT SECURE)"
         required: true
+        default: "1176ef01fd66e13880b3347a59f372564f"
         type: string
 
   pull_request:
@@ -35,7 +36,6 @@ jobs:
           echo "Hello"
           echo "Workflow triggered successfully"
 
-  
   validate-github-event:
     name: Validate GitHub Event
     runs-on: ubuntu-24.04
@@ -45,10 +45,11 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           echo "Event: $EVENT_NAME"
           echo "PR Number: $PR_NUMBER"
-          echo "GitHub workflow triggered"
+          echo "PR Head SHA: $PR_HEAD_SHA"
 
   trigger-jenkins:
     needs: hello
