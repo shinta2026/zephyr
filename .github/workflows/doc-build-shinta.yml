@@ -3,6 +3,12 @@ name: Test Workflow
 
 on:
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to test'
+        required: true
+        default: 'v4.4.0-ti-next_shinta'
+        type: string
 
   pull_request_target:
     branches:
@@ -18,6 +24,7 @@ permissions:
 
 jobs:
   hello:
+    name: Hello
     runs-on: ubuntu-24.04
 
     steps:
@@ -32,21 +39,34 @@ jobs:
 
     steps:
       - name: Print Event Details
+        shell: bash
+
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_ACTION: ${{ github.event.action }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          MANUAL_BRANCH: ${{ inputs.branch }}
 
         run: |
+          set -euo pipefail
+
           echo "Event: $EVENT_NAME"
-          echo "PR Action: $PR_ACTION"
-          echo "PR Number: $PR_NUMBER"
-          echo "PR Branch: $PR_HEAD_BRANCH"
-          echo "PR Head SHA: $PR_HEAD_SHA"
+
+          if [[ "$EVENT_NAME" == "pull_request_target" ]]; then
+            echo "PR Action: $PR_ACTION"
+            echo "PR Number: $PR_NUMBER"
+            echo "PR Branch: $PR_HEAD_BRANCH"
+            echo "PR Head SHA: $PR_HEAD_SHA"
+          else
+            echo "Manual workflow triggered"
+            echo "Branch: $MANUAL_BRANCH"
+          fi
 
   trigger-jenkins:
+    name: Trigger Jenkins Pipeline
+
     needs:
       - hello
       - validate-github-event
@@ -63,45 +83,80 @@ jobs:
 
         env:
           JENKINS_USER: "Admin"
+          JENKINS_URL: "http://10.201.0.17:8080"
+          JENKINS_JOB: "zephyr"
+
+          ZEPHYR_REPO: "https://github.com/shinta2026/zephyr"
+
           PR_ACTION: ${{ github.event.action }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
+          MANUAL_BRANCH: ${{ inputs.branch }}
+
         run: |
           set -euo pipefail
 
-          # Check Jenkins token from runner environment
+          echo "Checking Jenkins token..."
+
+          # Token is supplied by the self-hosted runner environment
           if [[ -z "${JENKINS_TOKEN:-}" ]]; then
             echo "ERROR: JENKINS_TOKEN is not available"
             exit 1
           fi
 
-          # Determine branch based on trigger type
+          echo "Jenkins token is available"
+
+          # Determine checkout parameters
           if [[ "$GITHUB_EVENT_NAME" == "pull_request_target" ]]; then
-            GIT_BRANCH="main"
+
+            echo "Pull Request event detected"
+
+            GIT_BRANCH="$PR_HEAD_BRANCH"
             COMMIT_SHA="$PR_HEAD_SHA"
+
+            if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+              echo "ERROR: Invalid PR number"
+              exit 1
+            fi
+
+            if [[ ! "$COMMIT_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+              echo "ERROR: Invalid PR head SHA"
+              exit 1
+            fi
+
           else
-            GIT_BRANCH="main"
+
+            echo "Manual workflow detected"
+
+            GIT_BRANCH="${MANUAL_BRANCH:-v4.4.0-ti-next_shinta}"
+            PR_NUMBER=""
             COMMIT_SHA=""
+
           fi
 
-          echo "Event: $GITHUB_EVENT_NAME"
+          echo "--------------------------------"
+          echo "GitHub Event: $GITHUB_EVENT_NAME"
           echo "PR Action: $PR_ACTION"
           echo "PR Number: $PR_NUMBER"
-          echo "PR Branch: $PR_HEAD_BRANCH"
+          echo "PR Source Branch: $PR_HEAD_BRANCH"
           echo "Branch sent to Jenkins: $GIT_BRANCH"
           echo "Commit SHA: $COMMIT_SHA"
-          echo "Jenkins User: $JENKINS_USER"
+          echo "Repository: $ZEPHYR_REPO"
+          echo "Jenkins Job: $JENKINS_JOB"
+          echo "--------------------------------"
 
-          # Trigger Jenkins pipeline
+          # Trigger Jenkins with PR parameters
+          echo "Triggering Jenkins pipeline..."
+
           curl --fail-with-body --silent --show-error \
             --user "$JENKINS_USER:$JENKINS_TOKEN" \
             --request POST \
-            --data-urlencode "GIT_REPO=https://github.com/shinta2026/imaging_fusa_test_automation" \
+            --data-urlencode "ZEPHYR_REPO=$ZEPHYR_REPO" \
             --data-urlencode "BRANCH=$GIT_BRANCH" \
-            --data-urlencode "COMMIT_SHA=$COMMIT_SHA" \
-            --data-urlencode "EMAIL_TO=shinta.zachariah@neurealm.com" \
-            "http://10.201.0.17:8080/job/imaging_fusa_automation_test/buildWithParameters"
+            --data-urlencode "PR_NUMBER=$PR_NUMBER" \
+            --data-urlencode "PR_HEAD_SHA=$COMMIT_SHA" \
+            "$JENKINS_URL/job/$JENKINS_JOB/buildWithParameters"
 
           echo "Jenkins build request accepted"
