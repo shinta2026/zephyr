@@ -40,7 +40,6 @@ jobs:
     steps:
       - name: Print Event Details
         shell: bash
-
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_ACTION: ${{ github.event.action }}
@@ -77,8 +76,32 @@ jobs:
 
     runs-on: [self-hosted, linux, x64, jenkins-internal]
 
+    timeout-minutes: 15
+
     steps:
-      - name: Trigger Jenkins
+      - name: Check Runner Requirements
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${JENKINS_TOKEN:-}" ]]; then
+            echo "ERROR: JENKINS_TOKEN is not available"
+            exit 1
+          fi
+
+          command -v curl >/dev/null || {
+            echo "ERROR: curl is not installed"
+            exit 1
+          }
+
+          command -v jq >/dev/null || {
+            echo "ERROR: jq is not installed"
+            exit 1
+          }
+
+          echo "Runner requirements verified"
+
+      - name: Trigger Jenkins and Check Current Status
         shell: bash
 
         env:
@@ -98,17 +121,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Checking Jenkins token..."
+          # ------------------------------------
+          # Determine branch and PR information
+          # ------------------------------------
 
-          # Token is supplied by the self-hosted runner environment
-          if [[ -z "${JENKINS_TOKEN:-}" ]]; then
-            echo "ERROR: JENKINS_TOKEN is not available"
-            exit 1
-          fi
-
-          echo "Jenkins token is available"
-
-          # Determine checkout parameters
           if [[ "$GITHUB_EVENT_NAME" == "pull_request_target" ]]; then
 
             echo "Pull Request event detected"
@@ -147,16 +163,178 @@ jobs:
           echo "Jenkins Job: $JENKINS_JOB"
           echo "--------------------------------"
 
-          # Trigger Jenkins with PR parameters
+          # ------------------------------------
+          # Jenkins job URL
+          # ------------------------------------
+
+          JOB_URL="${JENKINS_URL%/}/job/$JENKINS_JOB"
+
+          echo "Checking Jenkins job..."
+
+          curl --fail --silent --show-error \
+            --user "$JENKINS_USER:$JENKINS_TOKEN" \
+            --output /dev/null \
+            "$JOB_URL/api/json"
+
+          echo "Jenkins job is accessible"
+
+          # ------------------------------------
+          # Trigger Jenkins
+          # ------------------------------------
+
           echo "Triggering Jenkins pipeline..."
 
-          curl --fail-with-body --silent --show-error \
+          HEADER_FILE=$(mktemp)
+          trap 'rm -f "$HEADER_FILE"' EXIT
+
+          curl --fail --silent --show-error \
+            --dump-header "$HEADER_FILE" \
+            --output /dev/null \
             --user "$JENKINS_USER:$JENKINS_TOKEN" \
             --request POST \
             --data-urlencode "ZEPHYR_REPO=$ZEPHYR_REPO" \
             --data-urlencode "BRANCH=$GIT_BRANCH" \
             --data-urlencode "PR_NUMBER=$PR_NUMBER" \
             --data-urlencode "PR_HEAD_SHA=$COMMIT_SHA" \
-            "$JENKINS_URL/job/$JENKINS_JOB/buildWithParameters"
+            "$JOB_URL/buildWithParameters"
 
           echo "Jenkins build request accepted"
+
+          # ------------------------------------
+          # Get Jenkins queue URL
+          # ------------------------------------
+
+          QUEUE_URL=$(awk '
+            tolower($1) == "location:" {
+              $1 = ""
+              sub(/^[ \t]+/, "")
+              sub(/\r$/, "")
+              print
+            }
+          ' "$HEADER_FILE" | tail -n 1)
+
+          if [[ -z "$QUEUE_URL" ]]; then
+            echo "ERROR: Jenkins queue URL not found"
+            exit 1
+          fi
+
+          if [[ "$QUEUE_URL" == /* ]]; then
+            QUEUE_URL="${JENKINS_URL%/}$QUEUE_URL"
+          fi
+
+          echo "Jenkins Queue URL: $QUEUE_URL"
+
+          # ------------------------------------
+          # Wait for Jenkins build number
+          # ------------------------------------
+
+          BUILD_NUMBER=""
+          BUILD_URL=""
+
+          for i in {1..60}; do
+
+            QUEUE_JSON=$(curl --fail --silent --show-error \
+              --user "$JENKINS_USER:$JENKINS_TOKEN" \
+              "${QUEUE_URL%/}/api/json")
+
+            BUILD_NUMBER=$(echo "$QUEUE_JSON" |
+              jq -r '.executable.number // empty')
+
+            BUILD_URL=$(echo "$QUEUE_JSON" |
+              jq -r '.executable.url // empty')
+
+            if [[ -n "$BUILD_NUMBER" ]]; then
+              echo "Jenkins Build Number: $BUILD_NUMBER"
+              break
+            fi
+
+            CANCELLED=$(echo "$QUEUE_JSON" |
+              jq -r '.cancelled // false')
+
+            if [[ "$CANCELLED" == "true" ]]; then
+              echo "ERROR: Jenkins queue item cancelled"
+              exit 1
+            fi
+
+            echo "Waiting for Jenkins build to start... ($i/60)"
+            sleep 10
+
+          done
+
+          if [[ -z "$BUILD_NUMBER" ]]; then
+            echo "ERROR: Jenkins build did not start in time"
+            exit 1
+          fi
+
+          if [[ -z "$BUILD_URL" ]]; then
+            BUILD_URL="$JOB_URL/$BUILD_NUMBER/"
+          fi
+
+          echo "--------------------------------"
+          echo "Jenkins Build Number: $BUILD_NUMBER"
+          echo "Jenkins Build URL: $BUILD_URL"
+          echo "--------------------------------"
+
+          # ------------------------------------
+          # Get current Jenkins build status
+          # ------------------------------------
+
+          BUILD_JSON=$(curl --fail --silent --show-error \
+            --user "$JENKINS_USER:$JENKINS_TOKEN" \
+            "${BUILD_URL%/}/api/json")
+
+          BUILDING=$(echo "$BUILD_JSON" |
+            jq -r '.building')
+
+          RESULT=$(echo "$BUILD_JSON" |
+            jq -r '.result // empty')
+
+          if [[ "$BUILDING" == "true" ]]; then
+            STATUS="RUNNING"
+          else
+            STATUS="${RESULT:-UNKNOWN}"
+          fi
+
+          echo "Jenkins Current Status: $STATUS"
+
+          # ------------------------------------
+          # Fetch available Jenkins console logs
+          # ------------------------------------
+
+          echo "========== Jenkins Console Output =========="
+
+          curl --fail --silent --show-error \
+            --user "$JENKINS_USER:$JENKINS_TOKEN" \
+            "${BUILD_URL%/}/consoleText"
+
+          echo ""
+          echo "============================================"
+
+          # ------------------------------------
+          # GitHub Actions summary
+          # ------------------------------------
+
+          {
+            echo "### Jenkins Build Status"
+            echo ""
+            echo "- Job: $JENKINS_JOB"
+            echo "- Build Number: $BUILD_NUMBER"
+            echo "- Current Status: $STATUS"
+            echo "- Build URL: $BUILD_URL"
+            echo ""
+            echo "This is a status snapshot, not a final test result."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # ------------------------------------
+          # Finish GitHub Actions
+          # ------------------------------------
+
+          if [[ "$STATUS" == "FAILURE" ||
+                "$STATUS" == "ABORTED" ||
+                "$STATUS" == "UNSTABLE" ]]; then
+            echo "Jenkins has already completed with: $STATUS"
+            exit 1
+          fi
+
+          echo "Jenkins current status retrieved successfully"
+          exit 0
