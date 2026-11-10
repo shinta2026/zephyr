@@ -84,7 +84,7 @@ jobs:
         env:
           JENKINS_USER: "Admin"
           JENKINS_URL: "http://10.201.0.17:8080"
-          JENKINS_JOB: "zephyr"
+          JENKINS_JOB: "Shinta_PR_Check"
 
           ZEPHYR_REPO: "https://github.com/shinta2026/zephyr"
 
