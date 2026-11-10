@@ -98,7 +98,7 @@ jobs:
           curl --fail-with-body --silent --show-error \
             --user "$JENKINS_USER:$JENKINS_TOKEN" \
             --request POST \
-            --data-urlencode "GIT_REPO=https://github.com/shinta2026/zephyr" \
+            --data-urlencode "GIT_REPO=https://github.com/shinta2026/imaging_fusa_test_automation" \
             --data-urlencode "BRANCH=$GIT_BRANCH" \
             --data-urlencode "COMMIT_SHA=$COMMIT_SHA" \
             --data-urlencode "EMAIL_TO=shinta.zachariah@neurealm.com" \
