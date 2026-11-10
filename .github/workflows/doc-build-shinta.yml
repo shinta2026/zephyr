@@ -4,7 +4,9 @@ name: Test Workflow
 on:
   workflow_dispatch:
 
-  pull_request:
+  pull_request_target:
+    branches:
+      - v4.4.0-ti-next_shinta
     types:
       - opened
       - synchronize
@@ -32,12 +34,16 @@ jobs:
       - name: Print Event Details
         env:
           EVENT_NAME: ${{ github.event_name }}
+          PR_ACTION: ${{ github.event.action }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
         run: |
           echo "Event: $EVENT_NAME"
+          echo "PR Action: $PR_ACTION"
           echo "PR Number: $PR_NUMBER"
+          echo "PR Branch: $PR_HEAD_BRANCH"
           echo "PR Head SHA: $PR_HEAD_SHA"
 
   trigger-jenkins:
@@ -57,7 +63,9 @@ jobs:
 
         env:
           JENKINS_USER: "Admin"
+          PR_ACTION: ${{ github.event.action }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
         run: |
@@ -70,8 +78,8 @@ jobs:
           fi
 
           # Determine branch based on trigger type
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            GIT_BRANCH="refs/pull/${PR_NUMBER}/head"
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request_target" ]]; then
+            GIT_BRANCH="main"
             COMMIT_SHA="$PR_HEAD_SHA"
           else
             GIT_BRANCH="main"
@@ -79,10 +87,12 @@ jobs:
           fi
 
           echo "Event: $GITHUB_EVENT_NAME"
-          echo "Branch: $GIT_BRANCH"
+          echo "PR Action: $PR_ACTION"
+          echo "PR Number: $PR_NUMBER"
+          echo "PR Branch: $PR_HEAD_BRANCH"
+          echo "Branch sent to Jenkins: $GIT_BRANCH"
           echo "Commit SHA: $COMMIT_SHA"
           echo "Jenkins User: $JENKINS_USER"
-          echo "Jenkins Token: $JENKINS_TOKEN"
 
           # Trigger Jenkins pipeline
           curl --fail-with-body --silent --show-error \
@@ -90,6 +100,7 @@ jobs:
             --request POST \
             --data-urlencode "GIT_REPO=https://github.com/shinta2026/imaging_fusa_test_automation" \
             --data-urlencode "BRANCH=$GIT_BRANCH" \
+            --data-urlencode "COMMIT_SHA=$COMMIT_SHA" \
             --data-urlencode "EMAIL_TO=shinta.zachariah@neurealm.com" \
             "http://10.201.0.17:8080/job/imaging_fusa_automation_test/buildWithParameters"
 
