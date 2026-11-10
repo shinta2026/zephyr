@@ -81,14 +81,15 @@ jobs:
           echo "Event: $GITHUB_EVENT_NAME"
           echo "Branch: $GIT_BRANCH"
           echo "Commit SHA: $COMMIT_SHA"
+          echo "Jenkins User: $JENKINS_USER"
+          echo "Jenkins Token: $JENKINS_TOKEN"
 
           # Trigger Jenkins pipeline
           curl --fail-with-body --silent --show-error \
             --user "$JENKINS_USER:$JENKINS_TOKEN" \
             --request POST \
-            --data-urlencode "GIT_REPO=https://github.com/shinta2026/zephyr" \
+            --data-urlencode "GIT_REPO=https://github.com/shinta2026/imaging_fusa_test_automation" \
             --data-urlencode "BRANCH=$GIT_BRANCH" \
-            --data-urlencode "COMMIT_SHA=$COMMIT_SHA" \
             --data-urlencode "EMAIL_TO=shinta.zachariah@neurealm.com" \
             "http://10.201.0.17:8080/job/imaging_fusa_automation_test/buildWithParameters"
 
