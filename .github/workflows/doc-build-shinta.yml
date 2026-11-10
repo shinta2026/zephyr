@@ -40,7 +40,6 @@ jobs:
     steps:
       - name: Print Event Details
         shell: bash
-
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_ACTION: ${{ github.event.action }}
@@ -77,8 +76,32 @@ jobs:
 
     runs-on: [self-hosted, linux, x64, jenkins-internal]
 
+    timeout-minutes: 15
+
     steps:
-      - name: Trigger Jenkins
+      - name: Check Runner Requirements
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${JENKINS_TOKEN:-}" ]]; then
+            echo "ERROR: JENKINS_TOKEN is not available"
+            exit 1
+          fi
+
+          command -v curl >/dev/null || {
+            echo "ERROR: curl is not installed"
+            exit 1
+          }
+
+          command -v jq >/dev/null || {
+            echo "ERROR: jq is not installed"
+            exit 1
+          }
+
+          echo "Runner requirements verified"
+
+      - name: Trigger Jenkins and Check Current Status
         shell: bash
 
         env:
@@ -98,17 +121,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Checking Jenkins token..."
+          # ------------------------------------
+          # Determine branch and PR information
+          # ------------------------------------
 
-          # Token is supplied by the self-hosted runner environment
-          if [[ -z "${JENKINS_TOKEN:-}" ]]; then
-            echo "ERROR: JENKINS_TOKEN is not available"
-            exit 1
-          fi
-
-          echo "Jenkins token is available"
-
-          # Determine checkout parameters
           if [[ "$GITHUB_EVENT_NAME" == "pull_request_target" ]]; then
 
             echo "Pull Request event detected"
@@ -147,16 +163,45 @@ jobs:
           echo "Jenkins Job: $JENKINS_JOB"
           echo "--------------------------------"
 
-          # Trigger Jenkins with PR parameters
+          # ------------------------------------
+          # Jenkins job URL
+          # ------------------------------------
+
+          JOB_URL="${JENKINS_URL%/}/job/$JENKINS_JOB"
+
+          echo "Checking Jenkins job..."
+
+          curl --fail --silent --show-error \
+            --user "$JENKINS_USER:$JENKINS_TOKEN" \
+            --output /dev/null \
+            "$JOB_URL/api/json"
+
+          echo "Jenkins job is accessible"
+
+          # ------------------------------------
+          # Trigger Jenkins
+          # ------------------------------------
+
           echo "Triggering Jenkins pipeline..."
 
-          curl --fail-with-body --silent --show-error \
+          HEADER_FILE=$(mktemp)
+          trap 'rm -f "$HEADER_FILE"' EXIT
+
+          curl --fail --silent --show-error \
+            --dump-header "$HEADER_FILE" \
+            --output /dev/null \
             --user "$JENKINS_USER:$JENKINS_TOKEN" \
             --request POST \
             --data-urlencode "ZEPHYR_REPO=$ZEPHYR_REPO" \
             --data-urlencode "BRANCH=$GIT_BRANCH" \
             --data-urlencode "PR_NUMBER=$PR_NUMBER" \
             --data-urlencode "PR_HEAD_SHA=$COMMIT_SHA" \
-            "$JENKINS_URL/job/$JENKINS_JOB/buildWithParameters"
+            "$JOB_URL/buildWithParameters"
 
           echo "Jenkins build request accepted"
+
+          echo "Checking Jenkins latest build..."
+
+          BUILD_API="$JOB_URL/lastBuild/api/json"
+
+          echo "BUILD API: $BUILD_API"
