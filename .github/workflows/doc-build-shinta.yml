@@ -71,7 +71,7 @@ jobs:
 
           # Determine branch based on trigger type
           if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            GIT_BRANCH="refs/pull/${PR_NUMBER}/head"
+            GIT_BRANCH="main"
             COMMIT_SHA="$PR_HEAD_SHA"
           else
             GIT_BRANCH="main"
