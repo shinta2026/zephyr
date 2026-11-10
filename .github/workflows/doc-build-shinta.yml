@@ -34,30 +34,61 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+
         run: |
           echo "Event: $EVENT_NAME"
           echo "PR Number: $PR_NUMBER"
           echo "PR Head SHA: $PR_HEAD_SHA"
 
   trigger-jenkins:
-    needs: hello
+    needs:
+      - hello
+      - validate-github-event
+
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.head.repo.full_name == github.repository
+
     runs-on: [self-hosted, linux, x64, jenkins-internal]
 
     steps:
       - name: Trigger Jenkins
         shell: bash
+
         env:
           JENKINS_USER: "Admin"
-          GIT_BRANCH: "main"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
 
         run: |
           set -euo pipefail
 
+          # Check Jenkins token from runner environment
+          if [[ -z "${JENKINS_TOKEN:-}" ]]; then
+            echo "ERROR: JENKINS_TOKEN is not available"
+            exit 1
+          fi
+
+          # Determine branch based on trigger type
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            GIT_BRANCH="refs/pull/${PR_NUMBER}/head"
+            COMMIT_SHA="$PR_HEAD_SHA"
+          else
+            GIT_BRANCH="main"
+            COMMIT_SHA=""
+          fi
+
+          echo "Event: $GITHUB_EVENT_NAME"
+          echo "Branch: $GIT_BRANCH"
+          echo "Commit SHA: $COMMIT_SHA"
+
+          # Trigger Jenkins pipeline
           curl --fail-with-body --silent --show-error \
             --user "$JENKINS_USER:$JENKINS_TOKEN" \
             --request POST \
-            --data-urlencode "GIT_REPO=https://github.com/shinta2026/imaging_fusa_test_automation" \
+            --data-urlencode "GIT_REPO=https://github.com/shinta2026/zephyr" \
             --data-urlencode "BRANCH=$GIT_BRANCH" \
+            --data-urlencode "COMMIT_SHA=$COMMIT_SHA" \
             --data-urlencode "EMAIL_TO=shinta.zachariah@neurealm.com" \
             "http://10.201.0.17:8080/job/imaging_fusa_automation_test/buildWithParameters"
 
