@@ -22,21 +22,7 @@ on:
 permissions:
   contents: read
 
-# ==========================================
-# Global Configuration
-# ==========================================
-
-env:
-  JENKINS_TIMEOUT_MINUTES: 360
-  JENKINS_QUEUE_TIMEOUT_MINUTES: 30
-  JENKINS_POLL_INTERVAL_SECONDS: 10
-
 jobs:
-
-  # ==========================================
-  # Hello Job
-  # ==========================================
-
   hello:
     name: Hello
     runs-on: ubuntu-24.04
@@ -46,11 +32,6 @@ jobs:
         run: |
           echo "Hello"
           echo "Workflow triggered successfully"
-
-  # ==========================================
-  # Validate GitHub Event
-  # ==========================================
-
   validate-github-event:
     name: Validate GitHub Event
     runs-on: ubuntu-24.04
@@ -58,7 +39,6 @@ jobs:
     steps:
       - name: Print Event Details
         shell: bash
-
         env:
           EVENT_NAME: ${{ github.event_name }}
           PR_ACTION: ${{ github.event.action }}
@@ -69,27 +49,16 @@ jobs:
 
         run: |
           set -euo pipefail
-
           echo "Event: $EVENT_NAME"
-
           if [[ "$EVENT_NAME" == "pull_request_target" ]]; then
-
             echo "PR Action: $PR_ACTION"
             echo "PR Number: $PR_NUMBER"
             echo "PR Branch: $PR_HEAD_BRANCH"
             echo "PR Head SHA: $PR_HEAD_SHA"
-
           else
-
             echo "Manual workflow triggered"
             echo "Branch: $MANUAL_BRANCH"
-
           fi
-
-  # ==========================================
-  # Trigger Jenkins Pipeline
-  # ==========================================
-
   trigger-jenkins:
     name: Trigger Jenkins Pipeline
 
@@ -100,44 +69,22 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       github.event.pull_request.head.repo.full_name == github.repository
-
     runs-on: [self-hosted, linux, x64, jenkins-internal]
 
-    timeout-minutes: ${{ fromJSON(vars.JENKINS_JOB_TIMEOUT_MINUTES || '390') }}
+    timeout-minutes: 120
 
     steps:
-
-      # --------------------------------------
-      # Verify Runner Requirements
-      # --------------------------------------
-
       - name: Check Runner Requirements
         shell: bash
-
         run: |
           set -euo pipefail
-
           if [[ -z "${JENKINS_TOKEN:-}" ]]; then
             echo "ERROR: JENKINS_TOKEN is not available"
             exit 1
           fi
-
-          command -v curl >/dev/null || {
-            echo "ERROR: curl is not installed"
-            exit 1
-          }
-
-          command -v jq >/dev/null || {
-            echo "ERROR: jq is not installed"
-            exit 1
-          }
-
+          command -v curl >/dev/null || exit 1
+          command -v jq >/dev/null || exit 1
           echo "Runner requirements verified"
-
-      # --------------------------------------
-      # Trigger Jenkins and Monitor Build
-      # --------------------------------------
-
       - name: Trigger Jenkins and Monitor Build
         shell: bash
 
@@ -158,67 +105,31 @@ jobs:
 
         run: |
           set -euo pipefail
-
-          # ==================================
-          # Validate timeout configuration
-          # ==================================
-
-          for value in \
-            "$JENKINS_TIMEOUT_MINUTES" \
-            "$JENKINS_QUEUE_TIMEOUT_MINUTES" \
-            "$JENKINS_POLL_INTERVAL_SECONDS"; do
-
-            if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
-              echo "ERROR: Invalid timeout value: $value"
-              exit 1
-            fi
-
-          done
-
-          echo "===================================="
-          echo "Jenkins Timeout Configuration"
-          echo "===================================="
-          echo "Build Timeout: ${JENKINS_TIMEOUT_MINUTES} minutes"
-          echo "Queue Timeout: ${JENKINS_QUEUE_TIMEOUT_MINUTES} minutes"
-          echo "Polling Interval: ${JENKINS_POLL_INTERVAL_SECONDS} seconds"
-          echo "===================================="
-
-          # ==================================
-          # Determine GitHub event details
-          # ==================================
-
+          # ------------------------------------
+          # Determine branch and PR information
+          # ------------------------------------
           if [[ "$GITHUB_EVENT_NAME" == "pull_request_target" ]]; then
-
             echo "Pull Request event detected"
-
             GIT_BRANCH="$PR_HEAD_BRANCH"
             COMMIT_SHA="$PR_HEAD_SHA"
-
             if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
               echo "ERROR: Invalid PR number"
               exit 1
             fi
-
             if [[ ! "$COMMIT_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
               echo "ERROR: Invalid PR head SHA"
               exit 1
             fi
-
             if [[ "$PR_HEAD_REPO" != "$GITHUB_REPOSITORY" ]]; then
               echo "ERROR: Fork PR not supported"
               exit 1
             fi
-
           else
-
             echo "Manual workflow detected"
-
             GIT_BRANCH="${MANUAL_BRANCH:-v4.4.0-ti-next_shinta}"
             PR_NUMBER=""
             COMMIT_SHA=""
-
           fi
-
           echo "--------------------------------"
           echo "GitHub Event: $GITHUB_EVENT_NAME"
           echo "PR Action: $PR_ACTION"
@@ -229,40 +140,29 @@ jobs:
           echo "Repository: $ZEPHYR_REPO"
           echo "Jenkins Job: $JENKINS_JOB"
           echo "--------------------------------"
-
-          # ==================================
+          # ------------------------------------
           # Jenkins authentication
-          # ==================================
-
+          # ------------------------------------
           JOB_URL="${JENKINS_URL%/}/job/$JENKINS_JOB"
-
-          echo "::add-mask::$JENKINS_TOKEN"
-
           JENKINS_AUTH="$JENKINS_USER:$JENKINS_TOKEN"
-
+          echo "::add-mask::$JENKINS_TOKEN"
           echo "Checking Jenkins job..."
-
           curl --fail --silent --show-error \
-            --connect-timeout 10 \
-            --max-time 30 \
+            --connect-timeout 60 \
+            --max-time 120 \
             --user "$JENKINS_AUTH" \
             --output /dev/null \
             "$JOB_URL/api/json"
-
           echo "Jenkins job is accessible"
-
-          # ==================================
-          # Trigger Jenkins
-          # ==================================
-
+          # ------------------------------------
+          # Trigger Jenkins build
+          # ------------------------------------
           echo "Triggering Jenkins pipeline..."
-
           HEADER_FILE=$(mktemp)
           trap 'rm -f "$HEADER_FILE"' EXIT
-
           curl --fail --silent --show-error \
-            --connect-timeout 10 \
-            --max-time 60 \
+            --connect-timeout 60 \
+            --max-time 120 \
             --dump-header "$HEADER_FILE" \
             --output /dev/null \
             --user "$JENKINS_AUTH" \
@@ -272,13 +172,10 @@ jobs:
             --data-urlencode "PR_NUMBER=$PR_NUMBER" \
             --data-urlencode "PR_HEAD_SHA=$COMMIT_SHA" \
             "$JOB_URL/buildWithParameters"
-
           echo "Jenkins build request accepted"
-
-          # ==================================
-          # Extract Jenkins Queue URL
-          # ==================================
-
+          # ------------------------------------
+          # Extract Jenkins queue URL
+          # ------------------------------------
           QUEUE_URL=$(awk '
             tolower($1) == "location:" {
               $1 = ""
@@ -287,214 +184,140 @@ jobs:
               print
             }
           ' "$HEADER_FILE" | tail -n 1)
-
           if [[ -z "$QUEUE_URL" ]]; then
             echo "ERROR: Jenkins queue URL not found"
             exit 1
           fi
-
           if [[ "$QUEUE_URL" == /* ]]; then
             QUEUE_URL="${JENKINS_URL%/}$QUEUE_URL"
           fi
-
-          JENKINS_ORIGIN="${JENKINS_URL%/}"
-
-          if [[ "$QUEUE_URL" != "$JENKINS_ORIGIN/"* ]]; then
-            echo "ERROR: Unexpected Jenkins queue URL"
+          if [[ "$QUEUE_URL" != http://* &&
+                "$QUEUE_URL" != https://* ]]; then
+            echo "ERROR: Invalid Jenkins queue URL"
             exit 1
           fi
-
+          # Restrict queue URL to configured Jenkins host
+          JENKINS_ORIGIN="${JENKINS_URL%/}"
+          if [[ "$QUEUE_URL" != "$JENKINS_ORIGIN/"* ]]; then
+            echo "ERROR: Unexpected Jenkins queue host"
+            exit 1
+          fi
           echo "Jenkins Queue URL: $QUEUE_URL"
-
-          # ==================================
-          # Wait for Jenkins Build Number
-          # ==================================
-
+          # ------------------------------------
+          # Wait for Jenkins queue to start
+          # ------------------------------------
           echo "Waiting for Jenkins build number..."
-
-          QUEUE_DEADLINE=$(
-            (($(date +%s) + JENKINS_QUEUE_TIMEOUT_MINUTES * 60))
-          )
-
           BUILD_NUMBER=""
           BUILD_URL=""
-
-          while (( $(date +%s) < QUEUE_DEADLINE )); do
-
+          for i in {1..120}; do
             QUEUE_JSON=$(curl \
               --fail --silent --show-error \
-              --connect-timeout 10 \
-              --max-time 30 \
+              --connect-timeout 60 \
+              --max-time 120 \
               --user "$JENKINS_AUTH" \
               "${QUEUE_URL%/}/api/json")
-
             CANCELLED=$(echo "$QUEUE_JSON" | \
               jq -r '.cancelled // false')
-
             if [[ "$CANCELLED" == "true" ]]; then
               echo "ERROR: Jenkins queue item cancelled"
               exit 1
             fi
-
             BUILD_NUMBER=$(echo "$QUEUE_JSON" | \
               jq -r '.executable.number // empty')
-
             BUILD_URL=$(echo "$QUEUE_JSON" | \
               jq -r '.executable.url // empty')
-
             if [[ -n "$BUILD_NUMBER" &&
                   -n "$BUILD_URL" ]]; then
               break
             fi
-
             WHY=$(echo "$QUEUE_JSON" | \
               jq -r '.why // "Waiting for executor"')
-
-            echo "Queue Status: $WHY"
-
-            sleep "$JENKINS_POLL_INTERVAL_SECONDS"
-
+            echo "Queue attempt $i: $WHY"
+            sleep 5
           done
-
           if [[ -z "$BUILD_NUMBER" ||
                 -z "$BUILD_URL" ]]; then
-            echo "::error::Jenkins queue timeout after ${JENKINS_QUEUE_TIMEOUT_MINUTES} minutes"
+            echo "ERROR: Jenkins build did not start"
             exit 1
           fi
-
-          if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
-            echo "ERROR: Invalid Jenkins build number"
-            exit 1
-          fi
-
           if [[ "$BUILD_URL" != "$JOB_URL/"* ]]; then
             echo "ERROR: Unexpected Jenkins build URL"
             exit 1
           fi
-
+          if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: Invalid Jenkins build number"
+            exit 1
+          fi
           echo "--------------------------------"
           echo "Jenkins Build Number: $BUILD_NUMBER"
           echo "Jenkins Build URL: $BUILD_URL"
           echo "--------------------------------"
-
           echo "JENKINS_BUILD_URL=$BUILD_URL" >> "$GITHUB_ENV"
           echo "JENKINS_BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
-
-          # ==================================
-          # Monitor Jenkins Build
-          # ==================================
-
+          # ------------------------------------
+          # Monitor Jenkins build and logs
+          # ------------------------------------
           echo "Monitoring Jenkins build..."
-
-          BUILD_DEADLINE=$(
-            (($(date +%s) + JENKINS_TIMEOUT_MINUTES * 60))
-          )
-
           LOG_OFFSET=0
           BUILD_RESULT=""
-          IS_BUILDING="true"
-
-          while (( $(date +%s) < BUILD_DEADLINE )); do
-
-            # --------------------------------
-            # Retrieve incremental console log
-            # --------------------------------
-
+          # 120 minutes overall job timeout;
+          # this loop checks every 5 seconds.
+          for i in {1..1380}; do
+            # Fetch new console output incrementally
             LOG_HEADERS=$(mktemp)
             LOG_BODY=$(mktemp)
-
             curl --fail --silent --show-error \
-              --connect-timeout 10 \
-              --max-time 30 \
+              --connect-timeout 60 \
+              --max-time 120 \
               --user "$JENKINS_AUTH" \
               --dump-header "$LOG_HEADERS" \
               --output "$LOG_BODY" \
               "${BUILD_URL%/}/logText/progressiveText?start=$LOG_OFFSET"
-
             if [[ -s "$LOG_BODY" ]]; then
               cat "$LOG_BODY"
             fi
-
             NEXT_OFFSET=$(awk '
               tolower($1) == "x-text-size:" {
                 gsub(/\r/, "", $2)
                 print $2
               }
             ' "$LOG_HEADERS" | tail -n 1)
-
             if [[ "$NEXT_OFFSET" =~ ^[0-9]+$ ]]; then
               LOG_OFFSET="$NEXT_OFFSET"
             fi
-
             rm -f "$LOG_HEADERS" "$LOG_BODY"
-
-            # --------------------------------
-            # Check Jenkins build status
-            # --------------------------------
-
+            # Check exact Jenkins build status
             BUILD_JSON=$(curl \
               --fail --silent --show-error \
-              --connect-timeout 10 \
-              --max-time 30 \
+              --connect-timeout 60 \
+              --max-time 120 \
               --user "$JENKINS_AUTH" \
               "${BUILD_URL%/}/api/json?tree=building,result")
-
             IS_BUILDING=$(echo "$BUILD_JSON" | \
               jq -r '.building')
-
             BUILD_RESULT=$(echo "$BUILD_JSON" | \
               jq -r '.result // empty')
-
             if [[ "$IS_BUILDING" == "false" ]]; then
-
               # Retrieve remaining console output
               curl --fail --silent --show-error \
-                --connect-timeout 10 \
+                --connect-timeout 60 \
                 --max-time 60 \
                 --user "$JENKINS_AUTH" \
                 "${BUILD_URL%/}/logText/progressiveText?start=$LOG_OFFSET"
-
               echo ""
               echo "Jenkins build completed"
-
               break
-
             fi
-
             echo "Jenkins build #$BUILD_NUMBER running..."
-
-            sleep "$JENKINS_POLL_INTERVAL_SECONDS"
-
+            sleep 5
           done
-
-          # ==================================
-          # Check Monitoring Timeout
-          # ==================================
-
           if [[ "$IS_BUILDING" != "false" ]]; then
-
-            echo "::error::Jenkins build exceeded ${JENKINS_TIMEOUT_MINUTES} minutes"
-
-            {
-              echo "## Jenkins Pipeline Result"
-              echo ""
-              echo "**Status:** MONITORING TIMEOUT"
-              echo ""
-              echo "**Build:** #$BUILD_NUMBER"
-              echo ""
-              echo "**Timeout:** ${JENKINS_TIMEOUT_MINUTES} minutes"
-              echo ""
-              echo "**Jenkins URL:** $BUILD_URL"
-            } >> "$GITHUB_STEP_SUMMARY"
-
+            echo "ERROR: Jenkins build monitoring timed out"
             exit 1
-
           fi
-
-          # ==================================
-          # Print Final Jenkins Result
-          # ==================================
-
+          # ------------------------------------
+          # Print final Jenkins status
+          # ------------------------------------
           echo ""
           echo "===================================="
           echo "        JENKINS BUILD RESULT"
@@ -503,11 +326,7 @@ jobs:
           echo "Build URL    : $BUILD_URL"
           echo "Result       : $BUILD_RESULT"
           echo "===================================="
-
-          # ==================================
-          # GitHub Actions Job Summary
-          # ==================================
-
+          # GitHub Actions job summary
           {
             echo "## Jenkins Pipeline Result"
             echo ""
@@ -518,39 +337,30 @@ jobs:
             echo "| Branch | $GIT_BRANCH |"
             echo "| Commit | $COMMIT_SHA |"
             echo "| Jenkins | $BUILD_URL |"
-            echo "| Monitoring Timeout | ${JENKINS_TIMEOUT_MINUTES} minutes |"
           } >> "$GITHUB_STEP_SUMMARY"
-
-          # ==================================
-          # Propagate Jenkins Status to GitHub
-          # ==================================
-
+          # ------------------------------------
+          # Propagate Jenkins result to GitHub
+          # ------------------------------------
           case "$BUILD_RESULT" in
-
             SUCCESS)
               echo "Jenkins pipeline PASSED"
               echo "GitHub Actions job SUCCESS"
               exit 0
               ;;
-
             FAILURE)
               echo "::error::Jenkins pipeline FAILED"
               exit 1
               ;;
-
             ABORTED)
               echo "::error::Jenkins pipeline ABORTED"
               exit 1
               ;;
-
             UNSTABLE)
               echo "::error::Jenkins pipeline UNSTABLE"
               exit 1
               ;;
-
             *)
               echo "::error::Unknown Jenkins result: $BUILD_RESULT"
               exit 1
               ;;
-
           esac
