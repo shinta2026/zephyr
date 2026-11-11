@@ -212,8 +212,8 @@ jobs:
           for i in {1..120}; do
             QUEUE_JSON=$(curl \
               --fail --silent --show-error \
-              --connect-timeout 10 \
-              --max-time 30 \
+              --connect-timeout 60 \
+              --max-time 120 \
               --user "$JENKINS_AUTH" \
               "${QUEUE_URL%/}/api/json")
             CANCELLED=$(echo "$QUEUE_JSON" | \
@@ -267,8 +267,8 @@ jobs:
             LOG_HEADERS=$(mktemp)
             LOG_BODY=$(mktemp)
             curl --fail --silent --show-error \
-              --connect-timeout 10 \
-              --max-time 30 \
+              --connect-timeout 60 \
+              --max-time 120 \
               --user "$JENKINS_AUTH" \
               --dump-header "$LOG_HEADERS" \
               --output "$LOG_BODY" \
@@ -289,8 +289,8 @@ jobs:
             # Check exact Jenkins build status
             BUILD_JSON=$(curl \
               --fail --silent --show-error \
-              --connect-timeout 10 \
-              --max-time 30 \
+              --connect-timeout 60 \
+              --max-time 120 \
               --user "$JENKINS_AUTH" \
               "${BUILD_URL%/}/api/json?tree=building,result")
             IS_BUILDING=$(echo "$BUILD_JSON" | \
@@ -300,7 +300,7 @@ jobs:
             if [[ "$IS_BUILDING" == "false" ]]; then
               # Retrieve remaining console output
               curl --fail --silent --show-error \
-                --connect-timeout 10 \
+                --connect-timeout 60 \
                 --max-time 60 \
                 --user "$JENKINS_AUTH" \
                 "${BUILD_URL%/}/logText/progressiveText?start=$LOG_OFFSET"
