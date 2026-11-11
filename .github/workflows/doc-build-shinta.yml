@@ -200,8 +200,251 @@ jobs:
 
           echo "Jenkins build request accepted"
 
-          echo "Checking Jenkins latest build..."
+          # ------------------------------------
+          # Extract Jenkins queue URL
+          # ------------------------------------
 
-          BUILD_API="$JOB_URL/lastBuild/api/json"
+          QUEUE_URL=$(awk '
+            tolower($1) == "location:" {
+              $1 = ""
+              sub(/^[ \t]+/, "")
+              sub(/\r$/, "")
+              print
+            }
+          ' "$HEADER_FILE" | tail -n 1)
 
-          echo "BUILD API: $BUILD_API"
+          if [[ -z "$QUEUE_URL" ]]; then
+            echo "ERROR: Jenkins queue URL not found"
+            exit 1
+          fi
+
+          if [[ "$QUEUE_URL" == /* ]]; then
+            QUEUE_URL="${JENKINS_URL%/}$QUEUE_URL"
+          fi
+
+          if [[ "$QUEUE_URL" != http://* &&
+                "$QUEUE_URL" != https://* ]]; then
+            echo "ERROR: Invalid Jenkins queue URL"
+            exit 1
+          fi
+
+          # Restrict queue URL to configured Jenkins host
+          JENKINS_ORIGIN="${JENKINS_URL%/}"
+          if [[ "$QUEUE_URL" != "$JENKINS_ORIGIN/"* ]]; then
+            echo "ERROR: Unexpected Jenkins queue host"
+            exit 1
+          fi
+
+          echo "Jenkins Queue URL: $QUEUE_URL"
+
+          # ------------------------------------
+          # Wait for Jenkins queue to start
+          # ------------------------------------
+
+          echo "Waiting for Jenkins build number..."
+
+          BUILD_NUMBER=""
+          BUILD_URL=""
+
+          for i in {1..120}; do
+
+            QUEUE_JSON=$(curl \
+              --fail --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --user "$JENKINS_AUTH" \
+              "${QUEUE_URL%/}/api/json")
+
+            CANCELLED=$(echo "$QUEUE_JSON" | \
+              jq -r '.cancelled // false')
+
+            if [[ "$CANCELLED" == "true" ]]; then
+              echo "ERROR: Jenkins queue item cancelled"
+              exit 1
+            fi
+
+            BUILD_NUMBER=$(echo "$QUEUE_JSON" | \
+              jq -r '.executable.number // empty')
+
+            BUILD_URL=$(echo "$QUEUE_JSON" | \
+              jq -r '.executable.url // empty')
+
+            if [[ -n "$BUILD_NUMBER" &&
+                  -n "$BUILD_URL" ]]; then
+              break
+            fi
+
+            WHY=$(echo "$QUEUE_JSON" | \
+              jq -r '.why // "Waiting for executor"')
+
+            echo "Queue attempt $i: $WHY"
+
+            sleep 5
+
+          done
+
+          if [[ -z "$BUILD_NUMBER" ||
+                -z "$BUILD_URL" ]]; then
+            echo "ERROR: Jenkins build did not start"
+            exit 1
+          fi
+
+          if [[ "$BUILD_URL" != "$JOB_URL/"* ]]; then
+            echo "ERROR: Unexpected Jenkins build URL"
+            exit 1
+          fi
+
+          if [[ ! "$BUILD_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: Invalid Jenkins build number"
+            exit 1
+          fi
+
+          echo "--------------------------------"
+          echo "Jenkins Build Number: $BUILD_NUMBER"
+          echo "Jenkins Build URL: $BUILD_URL"
+          echo "--------------------------------"
+
+          echo "JENKINS_BUILD_URL=$BUILD_URL" >> "$GITHUB_ENV"
+          echo "JENKINS_BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
+
+          # ------------------------------------
+          # Monitor Jenkins build and logs
+          # ------------------------------------
+
+          echo "Monitoring Jenkins build..."
+
+          LOG_OFFSET=0
+          BUILD_RESULT=""
+
+          # 120 minutes overall job timeout;
+          # this loop checks every 5 seconds.
+
+          for i in {1..1380}; do
+
+            # Fetch new console output incrementally
+            LOG_HEADERS=$(mktemp)
+            LOG_BODY=$(mktemp)
+
+            curl --fail --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --user "$JENKINS_AUTH" \
+              --dump-header "$LOG_HEADERS" \
+              --output "$LOG_BODY" \
+              "${BUILD_URL%/}/logText/progressiveText?start=$LOG_OFFSET"
+
+            if [[ -s "$LOG_BODY" ]]; then
+              cat "$LOG_BODY"
+            fi
+
+            NEXT_OFFSET=$(awk '
+              tolower($1) == "x-text-size:" {
+                gsub(/\r/, "", $2)
+                print $2
+              }
+            ' "$LOG_HEADERS" | tail -n 1)
+
+            if [[ "$NEXT_OFFSET" =~ ^[0-9]+$ ]]; then
+              LOG_OFFSET="$NEXT_OFFSET"
+            fi
+
+            rm -f "$LOG_HEADERS" "$LOG_BODY"
+
+            # Check exact Jenkins build status
+            BUILD_JSON=$(curl \
+              --fail --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
+              --user "$JENKINS_AUTH" \
+              "${BUILD_URL%/}/api/json?tree=building,result")
+
+            IS_BUILDING=$(echo "$BUILD_JSON" | \
+              jq -r '.building')
+
+            BUILD_RESULT=$(echo "$BUILD_JSON" | \
+              jq -r '.result // empty')
+
+            if [[ "$IS_BUILDING" == "false" ]]; then
+
+              # Retrieve remaining console output
+              curl --fail --silent --show-error \
+                --connect-timeout 10 \
+                --max-time 60 \
+                --user "$JENKINS_AUTH" \
+                "${BUILD_URL%/}/logText/progressiveText?start=$LOG_OFFSET"
+
+              echo ""
+              echo "Jenkins build completed"
+              break
+
+            fi
+
+            echo "Jenkins build #$BUILD_NUMBER running..."
+            sleep 5
+
+          done
+
+          if [[ "$IS_BUILDING" != "false" ]]; then
+            echo "ERROR: Jenkins build monitoring timed out"
+            exit 1
+          fi
+
+          # ------------------------------------
+          # Print final Jenkins status
+          # ------------------------------------
+
+          echo ""
+          echo "===================================="
+          echo "        JENKINS BUILD RESULT"
+          echo "===================================="
+          echo "Build Number : $BUILD_NUMBER"
+          echo "Build URL    : $BUILD_URL"
+          echo "Result       : $BUILD_RESULT"
+          echo "===================================="
+
+          # GitHub Actions job summary
+          {
+            echo "## Jenkins Pipeline Result"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Build | #$BUILD_NUMBER |"
+            echo "| Result | $BUILD_RESULT |"
+            echo "| Branch | $GIT_BRANCH |"
+            echo "| Commit | $COMMIT_SHA |"
+            echo "| Jenkins | $BUILD_URL |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # ------------------------------------
+          # Propagate Jenkins result to GitHub
+          # ------------------------------------
+
+          case "$BUILD_RESULT" in
+
+            SUCCESS)
+              echo "Jenkins pipeline PASSED"
+              echo "GitHub Actions job SUCCESS"
+              exit 0
+              ;;
+
+            FAILURE)
+              echo "::error::Jenkins pipeline FAILED"
+              exit 1
+              ;;
+
+            ABORTED)
+              echo "::error::Jenkins pipeline ABORTED"
+              exit 1
+              ;;
+
+            UNSTABLE)
+              echo "::error::Jenkins pipeline UNSTABLE"
+              exit 1
+              ;;
+
+            *)
+              echo "::error::Unknown Jenkins result: $BUILD_RESULT"
+              exit 1
+              ;;
+
+          esac
