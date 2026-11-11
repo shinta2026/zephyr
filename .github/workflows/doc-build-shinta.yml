@@ -76,7 +76,7 @@ jobs:
 
     runs-on: [self-hosted, linux, x64, jenkins-internal]
 
-    timeout-minutes: 15
+    timeout-minutes: 120
 
     steps:
       - name: Check Runner Requirements
@@ -89,19 +89,12 @@ jobs:
             exit 1
           fi
 
-          command -v curl >/dev/null || {
-            echo "ERROR: curl is not installed"
-            exit 1
-          }
-
-          command -v jq >/dev/null || {
-            echo "ERROR: jq is not installed"
-            exit 1
-          }
+          command -v curl >/dev/null || exit 1
+          command -v jq >/dev/null || exit 1
 
           echo "Runner requirements verified"
 
-      - name: Trigger Jenkins and Check Current Status
+      - name: Trigger Jenkins and Monitor Build
         shell: bash
 
         env:
@@ -115,6 +108,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
 
           MANUAL_BRANCH: ${{ inputs.branch }}
 
@@ -142,6 +136,11 @@ jobs:
               exit 1
             fi
 
+            if [[ "$PR_HEAD_REPO" != "$GITHUB_REPOSITORY" ]]; then
+              echo "ERROR: Fork PR not supported"
+              exit 1
+            fi
+
           else
 
             echo "Manual workflow detected"
@@ -164,22 +163,28 @@ jobs:
           echo "--------------------------------"
 
           # ------------------------------------
-          # Jenkins job URL
+          # Jenkins authentication
           # ------------------------------------
 
           JOB_URL="${JENKINS_URL%/}/job/$JENKINS_JOB"
 
+          JENKINS_AUTH="$JENKINS_USER:$JENKINS_TOKEN"
+
+          echo "::add-mask::$JENKINS_TOKEN"
+
           echo "Checking Jenkins job..."
 
           curl --fail --silent --show-error \
-            --user "$JENKINS_USER:$JENKINS_TOKEN" \
+            --connect-timeout 10 \
+            --max-time 30 \
+            --user "$JENKINS_AUTH" \
             --output /dev/null \
             "$JOB_URL/api/json"
 
           echo "Jenkins job is accessible"
 
           # ------------------------------------
-          # Trigger Jenkins
+          # Trigger Jenkins build
           # ------------------------------------
 
           echo "Triggering Jenkins pipeline..."
@@ -188,9 +193,11 @@ jobs:
           trap 'rm -f "$HEADER_FILE"' EXIT
 
           curl --fail --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 60 \
             --dump-header "$HEADER_FILE" \
             --output /dev/null \
-            --user "$JENKINS_USER:$JENKINS_TOKEN" \
+            --user "$JENKINS_AUTH" \
             --request POST \
             --data-urlencode "ZEPHYR_REPO=$ZEPHYR_REPO" \
             --data-urlencode "BRANCH=$GIT_BRANCH" \
