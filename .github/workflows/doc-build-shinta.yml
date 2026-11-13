@@ -167,10 +167,8 @@ jobs:
             --output /dev/null \
             --user "$JENKINS_AUTH" \
             --request POST \
-            --data-urlencode "ZEPHYR_REPO=$ZEPHYR_REPO" \
-            --data-urlencode "BRANCH=$GIT_BRANCH" \
+            --data-urlencode "GITHUB_REPO=$ZEPHYR_REPO" \
             --data-urlencode "PR_NUMBER=$PR_NUMBER" \
-            --data-urlencode "PR_HEAD_SHA=$COMMIT_SHA" \
             "$JOB_URL/buildWithParameters"
           echo "Jenkins build request accepted"
           # ------------------------------------
